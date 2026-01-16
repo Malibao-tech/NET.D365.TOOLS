@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36811.4 d17.14
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NET.D365.TOOLS", "NET.D365.TOOLS\NET.D365.TOOLS.csproj", "{B1AB60E8-37B2-48F2-879D-0B33F2FB558A}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{B1AB60E8-37B2-48F2-879D-0B33F2FB558A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B1AB60E8-37B2-48F2-879D-0B33F2FB558A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B1AB60E8-37B2-48F2-879D-0B33F2FB558A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B1AB60E8-37B2-48F2-879D-0B33F2FB558A}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {1C495F4E-D507-4A69-BE6C-EB08D85F47E4}
+	EndGlobalSection
+EndGlobal
