@@ -27,7 +27,7 @@ namespace NET.D365.TOOLS
         private AntdUI.Input searchBox; // 使用 AntdUI 的 Input 增强视觉
         private AntdUI.Input filterBox; // 表内字段/中文搜索框
         private AntdUI.Button searchButton;
-        private AntdUI.Table tableGrid;
+        private System.Windows.Forms.DataGridView tableGrid;
         private AntdUI.Button refreshBtn;
         private Dictionary<string, string> _labelCache = new Dictionary<string, string>();
         private readonly string remotePath = @"\\172.31.10.54\PackagesLocalDirectory";
@@ -169,46 +169,95 @@ namespace NET.D365.TOOLS
 
 
             // AntdUI 表格区域
-            tableGrid = new AntdUI.Table
+            tableGrid = new System.Windows.Forms.DataGridView
             {
                 Dock = DockStyle.Fill,
+                BackgroundColor = Color.White,
+                BorderStyle = BorderStyle.None,
+                RowHeadersVisible = false,
+                AllowUserToAddRows = false,
+                ReadOnly = true,
+                SelectionMode = DataGridViewSelectionMode.CellSelect,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
                 Font = new Font("Microsoft YaHei UI", 10),
-                EmptyText = "暂无数据，请输入表名查询",
-                Columns = new AntdUI.ColumnCollection
-                {
-                    new AntdUI.Column("FieldName", "字段名", AntdUI.ColumnAlign.Left) { Width = "35%" },
-                    new AntdUI.Column("ChineseName", "中文名/标签", AntdUI.ColumnAlign.Left) { Width = "25%" },
-                    new AntdUI.Column("DataType", "数据类型", AntdUI.ColumnAlign.Center) { Width = "10%" },
-                    new AntdUI.Column("Length", "长度", AntdUI.ColumnAlign.Center) { Width = "10%" },
-                    new AntdUI.Column("RelatedTable", "关联表", AntdUI.ColumnAlign.Left) { Width = "20%" }
-                }
+                GridColor = Color.FromArgb(240, 240, 240),
+                AutoGenerateColumns = false,
+                EnableHeadersVisualStyles = false // 必须设为 false 才能自定义表头颜色
             };
 
-            tableGrid.CellClick += (s, e) => {
-                // 否则执行复制逻辑
-                var prop = e.Record.GetType().GetProperty(e.Column.Key);
-                if (prop != null)
-                {
-                    string val = prop.GetValue(e.Record)?.ToString() ?? "";
-                    val = val.Replace("  [Enum]", "").Trim();
+            // --- 表头美化 ---
+            tableGrid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+            tableGrid.ColumnHeadersHeight = 40; // 调高表头
+            tableGrid.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.Single;
+            tableGrid.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle
+            {
+                BackColor = Color.FromArgb(250, 250, 250), // 浅灰背景（Antd 风格）
+                ForeColor = Color.FromArgb(80, 80, 80),     // 深灰文字
+                SelectionBackColor = Color.FromArgb(250, 250, 250),
+                Alignment = DataGridViewContentAlignment.MiddleLeft,
+                Font = new Font("Microsoft YaHei UI", 10, FontStyle.Bold) // 表头加粗
+            };
 
-                    if (!string.IsNullOrEmpty(val))
+            // --- 行与单元格美化 ---
+            tableGrid.RowTemplate.Height = 35; // 调高行间距，不显得拥挤
+            tableGrid.DefaultCellStyle = new DataGridViewCellStyle
+            {
+                BackColor = Color.White,
+                ForeColor = Color.FromArgb(31, 31, 31),
+                SelectionBackColor = Color.FromArgb(230, 244, 255), // 选中行浅蓝色
+                SelectionForeColor = Color.FromArgb(22, 119, 255),  // 选中行文字变蓝
+                Padding = new Padding(5, 0, 0, 0)                   // 文字左侧留白
+            };
+
+            tableGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "FieldName", DataPropertyName = "FieldName", HeaderText = "字段名", FillWeight = 35 });
+            tableGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "ChineseName", DataPropertyName = "ChineseName", HeaderText = "中文名/标签", FillWeight = 25 });
+            tableGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "DataType", DataPropertyName = "DataType", HeaderText = "数据类型", FillWeight = 10 });
+            tableGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Length", DataPropertyName = "Length", HeaderText = "长度", FillWeight = 10 });
+            tableGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "RelatedTable", DataPropertyName = "RelatedTable", HeaderText = "关联表", FillWeight = 20 });
+
+            tableGrid.CellFormatting += (s, e) => {
+                if (e.RowIndex >= 0 && tableGrid.Columns[e.ColumnIndex].Name == "RelatedTable")
+                {
+                    if (e.Value != null && !string.IsNullOrEmpty(e.Value.ToString()))
                     {
-                        Clipboard.SetText(val);
+                        e.CellStyle.ForeColor = Color.FromArgb(22, 119, 255); // 设置为蓝色
+                        e.CellStyle.Font = new Font(tableGrid.Font, FontStyle.Underline); // 增加下划线
                     }
                 }
             };
 
-            tableGrid.CellHover += (s, e) => {
-                tableGrid.Cursor = Cursors.Hand;
+            tableGrid.CellClick += (s, e) => {
+                if (e.RowIndex < 0) return; // 忽略点击标题
+
+                var field = tableGrid.Rows[e.RowIndex].DataBoundItem as TableFieldModel;
+                if (field == null) return;
+
+                // 处理“关联表”跳转
+                if (tableGrid.Columns[e.ColumnIndex].Name == "RelatedTable" && !string.IsNullOrEmpty(field.RelatedTable))
+                {
+                    searchBox.Text = field.RelatedTable;
+                    btnSearch_Click(null, null); 
+                }
+
             };
 
-            tableGrid.CellDoubleClick += (s, e) => {
-                if (e.Record is TableFieldModel field && !string.IsNullOrEmpty(field.EnumType))
+            tableGrid.CellMouseEnter += (s, e) => {
+                if (e.RowIndex >= 0 && e.ColumnIndex >= 0 && tableGrid.Columns[e.ColumnIndex].Name == "RelatedTable")
                 {
-                    ShowEnumModal(field.EnumType);
+                    if (tableGrid.Rows[e.RowIndex].Cells[e.ColumnIndex].Value != null)
+                        tableGrid.Cursor = Cursors.Hand;
                 }
             };
+            tableGrid.CellMouseLeave += (s, e) => tableGrid.Cursor = Cursors.Default;
+
+            tableGrid.CellDoubleClick += (s, e) => {
+                if (e.RowIndex >= 0 && tableGrid.Rows[e.RowIndex].DataBoundItem is TableFieldModel field)
+                {
+                    if (!string.IsNullOrEmpty(field.EnumType)) ShowEnumModal(field.EnumType);
+                }
+            };
+
+            
 
             // 添加到窗体
             this.Controls.Add(tableGrid);
@@ -219,40 +268,75 @@ namespace NET.D365.TOOLS
         private void ShowEnumModal(string enumName)
         {
             // 1. 准备枚举数据
-            var enumItems = _metaHelper.GetEnumDetails(enumName).Select(x => new {
-                值 = x.Value,
-                键 = x.Name,
-                中文 = LabelHelper.GetText(x.Label, _labelCache)
+            var enumItems = _metaHelper.GetEnumDetails(enumName,_connString).Select(x => new EnumDisplayModel
+            {
+                Value = x.Value,
+                Key = x.Name,
+                Label = LabelHelper.GetText(x.Label, _labelCache)
             }).ToList();
 
             // 2. 动态创建 AntdUI Table
-            var enumTable = new AntdUI.Table
+            var enumGrid = new System.Windows.Forms.DataGridView
             {
                 Dock = DockStyle.Fill,
-                DataSource = enumItems,
-                Bordered = true,
-                Columns = new ColumnCollection {
-                    new Column("值", "Value") { Width = "60" },
-                    new Column("键", "Key") { Width = "160" },
-                    new Column("中文", "Label") { Width = "240" }
-                }
+                BackgroundColor = Color.White,
+                BorderStyle = BorderStyle.None,
+                RowHeadersVisible = false,
+                AllowUserToAddRows = false,
+                ReadOnly = true,
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+                Font = new Font("Microsoft YaHei UI", 10),
+                AutoGenerateColumns = false,
+                GridColor = Color.FromArgb(240, 240, 240), // 浅灰色网格线
+                EnableHeadersVisualStyles = false,
+
             };
 
-            // 3. 创建带圆角的 Panel 容器来控制整体大小
-            var container = new AntdUI.Panel
+            // --- 表头美化 ---
+            enumGrid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+            enumGrid.ColumnHeadersHeight = 40; // 调高表头
+            enumGrid.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.Single;
+            enumGrid.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle
             {
-                Size = new Size(520, 420), // 必须设置 Size 才能实现完美居中
-                Radius = 12,               // 现代感圆角
-                BackColor = Color.White,
-                Padding = new Padding(10)
+                BackColor = Color.FromArgb(250, 250, 250), // 浅灰背景（Antd 风格）
+                ForeColor = Color.FromArgb(80, 80, 80),     // 深灰文字
+                SelectionBackColor = Color.FromArgb(250, 250, 250),
+                Alignment = DataGridViewContentAlignment.MiddleLeft,
+                Font = new Font("Microsoft YaHei UI", 10, FontStyle.Bold) // 表头加粗
             };
-            container.Controls.Add(enumTable);
+
+            // --- 行与单元格美化 ---
+            enumGrid.RowTemplate.Height = 35; // 调高行间距，不显得拥挤
+            enumGrid.DefaultCellStyle = new DataGridViewCellStyle
+            {
+                BackColor = Color.White,
+                ForeColor = Color.FromArgb(31, 31, 31),
+                SelectionBackColor = Color.FromArgb(230, 244, 255), // 选中行浅蓝色
+                SelectionForeColor = Color.FromArgb(22, 119, 255),  // 选中行文字变蓝
+                Padding = new Padding(5, 0, 0, 0)                   // 文字左侧留白
+            };
+
+
+            enumGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "Value", HeaderText = "值", FillWeight = 20 });
+            enumGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "Key", HeaderText = "键", FillWeight = 40 });
+            enumGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "Label", HeaderText = "中文", FillWeight = 40 });
+
+            enumGrid.DataSource = enumItems;
+
+            // 3. 创建带圆角的 Panel 容器来控制整体大小
+            var container = new System.Windows.Forms.Panel // 改用原生 Panel 减少冲突
+            {
+                Size = new Size(520, 420),
+                Padding = new Padding(10),
+                BackColor = Color.White
+            };
+            container.Controls.Add(enumGrid);
 
             // 3. 弹出 Modal
             AntdUI.Modal.open(new AntdUI.Modal.Config(this, $"枚举明细: {enumName}", container)
             {
-                Width = 500,
-                MaskClosable = true
+                Width = 500
             });
 
 
@@ -274,7 +358,7 @@ namespace NET.D365.TOOLS
                 (x.ChineseName != null && x.ChineseName.ToLower().Contains(keyword))
             ).ToList();
 
-            tableGrid.DataSource = filtered;
+            tableGrid.DataSource = new BindingList<TableFieldModel>(filtered);
             UpdateStatus($"已过滤，显示 {filtered.Count} / {_allFieldsData.Count} 个字段", TState.Success);
         }
 
@@ -328,7 +412,8 @@ namespace NET.D365.TOOLS
                                    FROM sys.columns f 
                                    INNER JOIN sys.tables tb ON f.object_id = tb.object_id 
                                    INNER JOIN sys.types t ON f.user_type_id = t.user_type_id 
-                                   WHERE tb.name = @tableName";
+                                   WHERE tb.name = @tableName
+                                   ORDER BY f.name ";
 
                     var dbFields = await conn.QueryAsync<TableFieldModel>(sql, new { tableName });
 
@@ -375,7 +460,7 @@ namespace NET.D365.TOOLS
                             };
                         }).ToList();
                     });
-                    tableGrid.DataSource = _allFieldsData;
+                    tableGrid.DataSource = new BindingList<TableFieldModel>(_allFieldsData); 
                     filterBox.Text = string.Empty;
                     filterBox.Enabled = true; // 查出数据后开启表内搜索
                     UpdateStatus($"查询完成。表 {tableName} 共有 {_allFieldsData.Count} 个字段。", TState.Success);

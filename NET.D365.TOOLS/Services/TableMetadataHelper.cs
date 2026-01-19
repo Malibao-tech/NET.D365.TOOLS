@@ -1,4 +1,6 @@
-﻿using NET.D365.TOOLS.Models;
+﻿using Dapper;
+using Microsoft.Data.SqlClient;
+using NET.D365.TOOLS.Models;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
@@ -31,6 +33,7 @@ namespace NET.D365.TOOLS.Services
         // 性能优化：缓存已解析的最终 EDT LabelID
         private readonly ConcurrentDictionary<string, string> _resolvedEdtLabelCache = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+        private readonly ConcurrentDictionary<string, List<EnumItemModel>> _enumContentCache = new ConcurrentDictionary<string, List<EnumItemModel>>(StringComparer.OrdinalIgnoreCase);
 
         private readonly ConcurrentDictionary<string, (Dictionary<string, string> Labels,
                                              Dictionary<string, string> Relations,
@@ -178,9 +181,12 @@ namespace NET.D365.TOOLS.Services
         }
 
         // 增加获取枚举明细的方法
-        public List<EnumItemModel> GetEnumDetails(string enumName)
+        public List<EnumItemModel> GetEnumDetails(string enumName,string _connString)
         {
+            //if (_enumContentCache.TryGetValue(enumName, out var cachedList)) return cachedList;
+
             var list = new List<EnumItemModel>();
+
             if (_enumPathCache.TryGetValue(enumName, out string path))
             {
                 ParseEnumXml(path, list);
@@ -192,10 +198,68 @@ namespace NET.D365.TOOLS.Services
                     ParseEnumXml(extPath, list);
                 }
             }
-            return list.OrderBy(x => {
+
+            var usedValues = new HashSet<int>();
+            foreach (var item in list)
+            {
+                if (int.TryParse(item.Value, out int v))
+                {
+                    usedValues.Add(v);
+                }
+            }
+
+            int nextCandidate = 0;
+
+            foreach (var item in list.Where(i => string.IsNullOrEmpty(i.Value)))
+            {
+                if (string.IsNullOrEmpty(item.Value))
+                {
+                    // 如果是 None 或 Create，且 0 还没被占用，优先给 0
+                    if ((item.Name.Equals("None", StringComparison.OrdinalIgnoreCase) ||
+                         item.Name.Equals("Create", StringComparison.OrdinalIgnoreCase)) &&
+                        !usedValues.Contains(0))
+                    {
+                        item.Value = "0";
+                        usedValues.Add(0);
+                    }
+                    else
+                    {
+                        // 寻找下一个最小的可用的非负整数
+                        while (usedValues.Contains(nextCandidate))
+                        {
+                            nextCandidate++;
+                        }
+                        item.Value = nextCandidate.ToString();
+                        usedValues.Add(nextCandidate);
+                    }
+                }
+            }
+
+            if (enumName == "NoYes")
+            {
+                list.Add(new EnumItemModel
+                {
+                    Name = "No",
+                    Label = "否",
+                    Value = "0"
+                });
+                list.Add(new EnumItemModel
+                {
+                    Name = "Yes",
+                    Label = "是",
+                    Value = "1"
+                });
+            }
+
+            var sortedList = list.OrderBy(x => {
                 int.TryParse(x.Value, out int v);
-                return 999;
+                return v;
             }).ToList();
+
+            // 存入缓存
+            _enumContentCache.TryAdd(enumName, sortedList);
+
+            return sortedList;
         }
 
         private void ParseEnumXml(string path, List<EnumItemModel> list)
@@ -328,9 +392,12 @@ namespace NET.D365.TOOLS.Services
                 foreach (var relation in doc.Descendants("AxTableRelation"))
                 {
                     string relatedTable = relation.Element("RelatedTable")?.Value;
+
+                    if (string.IsNullOrEmpty(relatedTable)) continue;
                     foreach (var constraint in relation.Descendants("AxTableRelationConstraint"))
                     {
                         string fieldName = constraint.Element("Field")?.Value;
+                        string relatedField = constraint.Element("RelatedField")?.Value;
                         if (!string.IsNullOrEmpty(fieldName) && !string.IsNullOrEmpty(relatedTable))
                         {
                             relations[fieldName] = relatedTable;

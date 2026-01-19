@@ -28,10 +28,18 @@
         /// </summary>
         private void InitializeComponent()
         {
-            this.components = new System.ComponentModel.Container();
-            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(800, 450);
-            this.Text = "D365QueryForm";
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(D365QueryForm));
+            SuspendLayout();
+            // 
+            // D365QueryForm
+            // 
+            AutoScaleDimensions = new SizeF(7F, 17F);
+            AutoScaleMode = AutoScaleMode.Font;
+            ClientSize = new Size(800, 450);
+            Icon = (Icon)resources.GetObject("$this.Icon");
+            Name = "D365QueryForm";
+            Text = "D365QueryForm";
+            ResumeLayout(false);
         }
 
         #endregion

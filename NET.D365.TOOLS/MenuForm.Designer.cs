@@ -28,6 +28,7 @@
         /// </summary>
         private void InitializeComponent()
         {
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(MenuForm));
             SuspendLayout();
             // 
             // MenuForm
@@ -35,6 +36,7 @@
             AutoScaleDimensions = new SizeF(7F, 17F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(1159, 699);
+            Icon = (Icon)resources.GetObject("$this.Icon");
             Name = "MenuForm";
             Text = "Form1";
             ResumeLayout(false);
