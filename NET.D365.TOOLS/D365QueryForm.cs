@@ -2,6 +2,7 @@
 using AntdUI;
 using Dapper;
 using Microsoft.Data.SqlClient;
+using Microsoft.VisualBasic;
 using NET.D365.TOOLS.Models;
 using NET.D365.TOOLS.Services;
 using System;
@@ -24,7 +25,7 @@ namespace NET.D365.TOOLS
 {
     public partial class D365QueryForm : Form
     {
-        private AntdUI.Input searchBox; // 使用 AntdUI 的 Input 增强视觉
+        private AntdUI.Select searchBox; // 使用 AntdUI 的 Input 增强视觉
         private AntdUI.Input filterBox; // 表内字段/中文搜索框
         private AntdUI.Button searchButton;
         private System.Windows.Forms.DataGridView tableGrid;
@@ -41,11 +42,16 @@ namespace NET.D365.TOOLS
         // 用于存放当前查出来的全量字段数据，方便在内存中快速过滤
         private List<TableFieldModel> _allFieldsData = new List<TableFieldModel>();
 
+        private List<string> _searchHistory = new List<string>();
+        private readonly string _historyFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "search_history.json");
         public D365QueryForm()
         {
             InitializeComponent();
             InitializeUI();
             LoadLabelCache();
+            this.Load += (s, e) => {
+                LoadSearchHistory();
+            };
         }
 
         private void InitializeUI()
@@ -63,17 +69,20 @@ namespace NET.D365.TOOLS
                 Padding = new Padding(20)
             };
 
-            searchBox = new AntdUI.Input
+            searchBox = new AntdUI.Select
             {
                 PlaceholderText = "输入 D365 表名（如：SalesTable、CustTable）",
-                Size = new Size(300, 40),
-                Location = new Point(20, 20),
+                Size = new Size(290, 40),
+                Location = new Point(30, 20),
                 Font = new Font("Microsoft YaHei UI", 10)
             };
 
+           
+
+
             searchButton = new AntdUI.Button
             {
-                Text = "查询字段",
+                Text = "查询表",
                 Type = AntdUI.TTypeMini.Primary,
                 Size = new Size(110, 40),
                 Location = new Point(330, 20),
@@ -103,7 +112,7 @@ namespace NET.D365.TOOLS
             refreshBtn = new AntdUI.Button
             {
                 Text = "更新索引",
-                Type = AntdUI.TTypeMini.Default,
+                Type = AntdUI.TTypeMini.Success,
                 Size = new Size(100, 40),
                 Location = new Point(780, 20), // 放在 filterBox 后面
             };
@@ -115,8 +124,9 @@ namespace NET.D365.TOOLS
                     // 1. 同时执行两个耗时任务
                     var task1 = Task.Run(() => _metaHelper.BuildPathIndex(forceRefresh: true));
                     var task2 = LabelHelper.LoadAllLabelsAsync(remotePath, forceRefresh: true);
+                    var task3 = Task.Run(() => _metaHelper.BuildGlobalRelationMap(remotePath, forceRefresh: true));
 
-                    await Task.WhenAll(task1, task2);
+                    await Task.WhenAll(task1, task2, task3);
 
                     // 2. 更新内存中的 Label 引用
                     _labelCache = await task2;
@@ -133,8 +143,8 @@ namespace NET.D365.TOOLS
                     refreshBtn.Loading = false;
                 }
             };
+           
             searchPanel.Controls.Add(refreshBtn);
-
             searchPanel.Controls.Add(searchBox);
             searchPanel.Controls.Add(searchButton);
             searchPanel.Controls.Add(filterBox);
@@ -226,17 +236,69 @@ namespace NET.D365.TOOLS
                 }
             };
 
-            tableGrid.CellClick += (s, e) => {
-                if (e.RowIndex < 0) return; // 忽略点击标题
+            tableGrid.CellClick += async (s, e) => {
+                if (e.RowIndex < 0) return;
 
-                var field = tableGrid.Rows[e.RowIndex].DataBoundItem as TableFieldModel;
-                if (field == null) return;
-
-                // 处理“关联表”跳转
-                if (tableGrid.Columns[e.ColumnIndex].Name == "RelatedTable" && !string.IsNullOrEmpty(field.RelatedTable))
+                // 获取当前列名，假设你使用的是 DataGridView
+                if (tableGrid.Columns[e.ColumnIndex].Name == "RelatedTable")
                 {
-                    searchBox.Text = field.RelatedTable;
-                    btnSearch_Click(null, null); 
+                    var field = tableGrid.Rows[e.RowIndex].DataBoundItem as TableFieldModel;
+                    if (field != null && !string.IsNullOrEmpty(field.RelatedTable))
+                    {
+                        string mainTable = searchBox.Text.Trim();
+
+                        string cleanFieldName = field.FieldName.Split(' ')[0];
+                        // 2. 从元数据中提取具体的关联约束 (Constraints)
+                        // 需要在 TableMetadataHelper 中增加一个获取具体关联对的方法
+                        var constraints = await Task.Run(() =>
+                            _metaHelper.GetTableRelationDetails(mainTable, field.RelatedTable, cleanFieldName));
+
+                        if (constraints != null && constraints.Any())
+                        {
+                            var rtb = new RichTextBox
+                            {
+                                ReadOnly = true,
+                                BorderStyle = BorderStyle.None,
+                                BackColor = Color.FromArgb(245, 245, 245), // 浅灰色背景
+                                Font = new Font("Consolas", 11F), // 使用等宽字体
+                                Width = 650,
+                                Height = 150,
+                                Padding = new Padding(10)
+                            };
+
+                            foreach (var c in constraints)
+                            {
+                                if (c.SourceField == "(固定过滤)")
+                                {
+                                    rtb.SelectionColor = Color.DimGray;
+                                    rtb.AppendText(" [Filter] ");
+                                    rtb.SelectionColor = Color.Crimson; // 关联表颜色
+                                    rtb.AppendText($"{field.RelatedTable}.{c.TargetField}");
+                                }
+                                else
+                                {
+                                    rtb.SelectionColor = Color.RoyalBlue;
+                                    rtb.AppendText(mainTable);
+                                    rtb.SelectionColor = Color.Black;
+                                    rtb.AppendText($".{c.SourceField} = ");
+                                    rtb.SelectionColor = Color.Crimson;
+                                    rtb.AppendText($"{field.RelatedTable}.{c.TargetField}");
+                                }
+                                rtb.AppendText("\r\n");
+                            }
+
+                            // 4. AntdUI 弹窗展示
+                            AntdUI.Modal.open(new AntdUI.Modal.Config(this, $"数据关联详情 ({field.RelatedTable})", rtb)
+                            {
+                                Width = 700,
+                                OnOk = (config) => { return true; }
+                            });
+                        }
+                        else
+                        {
+                            AntdUI.Message.info(this, $"该关联可能基于 EDT 逻辑引用，指向目标表 RecId。");
+                        }
+                    }
                 }
 
             };
@@ -257,7 +319,7 @@ namespace NET.D365.TOOLS
                 }
             };
 
-            
+
 
             // 添加到窗体
             this.Controls.Add(tableGrid);
@@ -265,10 +327,54 @@ namespace NET.D365.TOOLS
             this.Controls.Add(statusPanel);
         }
 
+        private void LoadSearchHistory()
+        {
+            if (File.Exists(_historyFilePath))
+            {
+                try
+                {
+                    var json = File.ReadAllText(_historyFilePath);
+                    _searchHistory = Newtonsoft.Json.JsonConvert.DeserializeObject<List<string>>(json) ?? new List<string>();
+                    UpdateSearchBoxAutoComplete();
+                }
+                catch { _searchHistory = new List<string>(); }
+            }
+        }
+
+        private void UpdateSearchBoxAutoComplete()
+        {
+            searchBox.Items.Clear();
+            foreach (var item in _searchHistory)
+            {
+                // 直接添加字符串，AntdUI 会自动处理显示
+                searchBox.Items.Add(item);
+            }
+        }
+
+        private void SaveToHistory(string tableName)
+        {
+            if (string.IsNullOrEmpty(tableName)) return;
+
+            // 1. 去重并置顶：如果已存在则删除旧的，插入到第一个
+            _searchHistory.RemoveAll(x => x.Equals(tableName, StringComparison.OrdinalIgnoreCase));
+            _searchHistory.Insert(0, tableName);
+
+            // 2. 限制数量（例如只记 20 个）
+            if (_searchHistory.Count > 20) _searchHistory = _searchHistory.Take(20).ToList();
+
+            // 3. 更新 UI
+            UpdateSearchBoxAutoComplete();
+
+            // 4. 异步写入本地文件
+            Task.Run(() => {
+                File.WriteAllText(_historyFilePath, Newtonsoft.Json.JsonConvert.SerializeObject(_searchHistory));
+            });
+        }
+
         private void ShowEnumModal(string enumName)
         {
             // 1. 准备枚举数据
-            var enumItems = _metaHelper.GetEnumDetails(enumName,_connString).Select(x => new EnumDisplayModel
+            var enumItems = _metaHelper.GetEnumDetails(enumName, _connString).Select(x => new EnumDisplayModel
             {
                 Value = x.Value,
                 Key = x.Name,
@@ -368,7 +474,7 @@ namespace NET.D365.TOOLS
             _metaHelper = new TableMetadataHelper(remotePath);
 
             _labelCache = await Task.Run(async () => {
-                
+
                 if (System.IO.File.Exists("label_cache.json"))
                 {
                     try
@@ -379,7 +485,7 @@ namespace NET.D365.TOOLS
                     catch { return null; }
                 }
                 return await LabelHelper.LoadAllLabelsAsync(remotePath);
-            }) ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); 
+            }) ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             UpdateStatus("系统就绪，元数据及 Label 缓存已加载。", TState.Success);
         }
 
@@ -393,16 +499,16 @@ namespace NET.D365.TOOLS
             statusLabel.Text = text;
             statusIcon.State = state;
         }
-        
+
         private async void btnSearch_Click(object sender, EventArgs e)
         {
             string tableName = searchBox.Text.Trim();
-
+            
             if (string.IsNullOrEmpty(tableName)) return;
-
+           
             searchButton.Loading = true;
             filterBox.Enabled = false;
-            
+
             UpdateStatus($"正在查询表 {tableName} 的字段数据...", TState.Processing);
             try
             {
@@ -460,10 +566,14 @@ namespace NET.D365.TOOLS
                             };
                         }).ToList();
                     });
-                    tableGrid.DataSource = new BindingList<TableFieldModel>(_allFieldsData); 
+                    tableGrid.DataSource = new BindingList<TableFieldModel>(_allFieldsData);
                     filterBox.Text = string.Empty;
                     filterBox.Enabled = true; // 查出数据后开启表内搜索
                     UpdateStatus($"查询完成。表 {tableName} 共有 {_allFieldsData.Count} 个字段。", TState.Success);
+                    if (_allFieldsData.Count > 0)
+                    {
+                        SaveToHistory(tableName);
+                    }
                 }
             }
             catch (Exception ex)

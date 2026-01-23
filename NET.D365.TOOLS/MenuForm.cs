@@ -144,12 +144,15 @@ namespace NET.D365.TOOLS
 
             // 创建功能卡片
             var card1 = CreateFeatureCard("📊", "D365表查询", "快速查询和浏览Dynamics 365数据表", Color.FromArgb(87, 148, 242));
-            var card2 = CreateFeatureCard("🗑️", "清除数据库日志", "清理数据库日志文件，释放存储空间", Color.FromArgb(82, 196, 26));
-            var card3 = CreateFeatureCard("🔄", "重启服务器", "安全重启服务器服务", Color.FromArgb(250, 84, 28));
+            //var card2 = CreateFeatureCard("🔗", "D365关系追踪器", "查询表和表之间关系", Color.FromArgb(250, 170, 100));
+            var card3 = CreateFeatureCard("🗑️", "清除数据库日志", "清理数据库日志文件，释放存储空间", Color.FromArgb(82, 196, 26));
+            var card4 = CreateFeatureCard("🔄", "重启服务器", "安全重启服务器服务", Color.FromArgb(250, 84, 28));
+           
 
             cardsPanel.Controls.Add(card1);
-            cardsPanel.Controls.Add(card2);
+            //cardsPanel.Controls.Add(card2);
             cardsPanel.Controls.Add(card3);
+            cardsPanel.Controls.Add(card4);
 
             panel.Controls.Add(welcomeLabel);
             panel.Controls.Add(descLabel);
@@ -226,8 +229,10 @@ namespace NET.D365.TOOLS
             var menuItems = new[]
             {
                 new { Key = "d365", Icon = "📊", Title = "D365表查询", Desc = "查询和浏览D365数据表" },
+                //new { Key = "related", Icon = "🔗", Title = "关系追踪器", Desc = "查询表和表之间关系" },
                 new { Key = "clearlog", Icon = "🗑️", Title = "清除数据库日志", Desc = "清理数据库日志文件" },
                 new { Key = "restart", Icon = "🔄", Title = "重启服务器", Desc = "重启服务器服务" }
+
             };
 
             foreach (var item in menuItems)
@@ -371,6 +376,7 @@ namespace NET.D365.TOOLS
             return key switch
             {
                 "d365" => new D365QueryForm(),
+                //"related" => new D365QueryForm(),
                 "clearlog" => new ClearLogForm(),
                 "restart" => new RestartServicesForm(),
                 _ => throw new NotImplementedException()

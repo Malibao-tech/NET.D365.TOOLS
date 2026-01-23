@@ -5,11 +5,13 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Xml;
 using System.Xml.Linq;
 using static Azure.Core.HttpHeader;
 
@@ -40,6 +42,12 @@ namespace NET.D365.TOOLS.Services
                                              Dictionary<string, string> FieldEdts,
                                              Dictionary<string, string> FieldEnums)> _tableMetaMemoryCache
     = new ConcurrentDictionary<string, (Dictionary<string, string>, Dictionary<string, string>, Dictionary<string, string>, Dictionary<string, string>)>(StringComparer.OrdinalIgnoreCase);
+
+        // 在 TableMetadataHelper 类中添加全局缓存
+        private static List<RelationEdge> _globalRelations = new List<RelationEdge>();
+        private readonly string _relationCachePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "relation_cache.json");
+
+
         public TableMetadataHelper(string rootPath)
         {
             _rootPath = rootPath;
@@ -408,6 +416,327 @@ namespace NET.D365.TOOLS.Services
             var result = (labels, relations, fieldEdtMap, fieldEnumMap);
             _tableMetaMemoryCache.TryAdd(tableName, result);
             return result;
+        }
+
+        public async Task<List<TableFieldModel>> GetTableFieldsAsync(string tableName, string connString, Dictionary<string, string> labelCache)
+        {
+             List<TableFieldModel> _allFieldsData = new List<TableFieldModel>();
+             var meta = GetMetadataFromXml(tableName);
+            using (var conn = new Microsoft.Data.SqlClient.SqlConnection(connString))
+            {
+                string sql = @"SELECT f.name AS FieldName, t.name AS DataType, f.max_length AS Length 
+                           FROM sys.columns f 
+                           INNER JOIN sys.tables tb ON f.object_id = tb.object_id 
+                           INNER JOIN sys.types t ON f.user_type_id = t.user_type_id 
+                           WHERE tb.name = @tableName
+                            ORDER BY f.name ";
+
+                var dbFields = await conn.QueryAsync<dynamic>(sql, new { tableName });
+
+                _allFieldsData = await Task.Run(() => {
+                    var meta = GetMetadataFromXml(tableName);
+
+                    return dbFields.Select(f => {
+                        if (!meta.Labels.TryGetValue(f.FieldName, out string labelId) || string.IsNullOrEmpty(labelId))
+                        {
+                            if (meta.FieldEdts.TryGetValue(f.FieldName, out string edtName))
+                            {
+                                if (!string.IsNullOrEmpty(edtName))
+                                {
+                                    labelId = GetEdtLabel(edtName);
+                                }
+                                else
+                                {
+                                    if (meta.FieldEnums.TryGetValue(f.FieldName, out string enumName))
+                                    {
+                                        labelId = GetEnumLabel(enumName);
+                                    }
+                                }
+                            }
+                        }
+
+                        string originalCaseFieldName = f.FieldName;
+
+                        var actualKey = meta.Labels.Keys.FirstOrDefault(k => k.Equals(f.FieldName, StringComparison.OrdinalIgnoreCase));
+
+                        if (actualKey != null)
+                        {
+                            originalCaseFieldName = actualKey;
+                        }
+
+                        string currentEnum = meta.FieldEnums.ContainsKey(f.FieldName) ? meta.FieldEnums[f.FieldName] : "";
+                        return new TableFieldModel
+                        {
+                            EnumType = currentEnum,
+                            FieldName = originalCaseFieldName,
+                            ChineseName = LabelHelper.GetText(labelId, labelCache),
+                            DataType = f.DataType,
+                            Length = f.Length,
+                            RelatedTable = meta.Relations.ContainsKey(f.FieldName) ? meta.Relations[f.FieldName] : ""
+                        };
+                    }).ToList();
+                });
+                return _allFieldsData;
+            }
+        }
+
+        public List<RelationEdge> GetGlobalRelations()
+        {
+            if (_globalRelations.Count == 0 && File.Exists(_relationCachePath))
+            {
+                try
+                {
+                    string json = File.ReadAllText(_relationCachePath);
+                    var cache = JsonConvert.DeserializeObject<List<RelationEdge>>(json);
+                    if (cache != null) _globalRelations.AddRange(cache);
+                }
+                catch { /* 忽略读取错误 */ }
+            }
+            return _globalRelations;
+        }
+
+        // 程序启动或第一次打开窗口时调用，预扫描核心模块的所有 AxTable XML
+        public void BuildGlobalRelationMap(string remotePath, bool forceRefresh = false)
+        {
+            if (!forceRefresh && _globalRelations.Count > 0) return;
+            if (!forceRefresh && File.Exists(_relationCachePath))
+            {
+                GetGlobalRelations(); // 直接从缓存读
+                return;
+            }
+
+            // 使用并发集合，确保多线程安全
+            var concurrentRelations = new ConcurrentBag<RelationEdge>();
+            //string[] corePackages = { "ApplicationSuite", "ApplicationFoundation", "ApplicationPlatform", "AOF","GeneralLedger","AGTI","IWS"
+            //        , "IWS_InferfaceOutbound", "IWS_InterfaceBase", "IWS_InterfaceInbound","Directory","Dimensions" };
+            var packages = Directory.GetDirectories(remotePath);
+            // 获取所有待处理的文件夹路径
+            var targetFolders = new List<(string FolderPath, bool IsExtension)>();
+            foreach (var package in packages)
+            {
+                string packagePath = Path.Combine(remotePath, package);
+                if (!Directory.Exists(packagePath)) continue;
+
+                var modelDirs = Directory.GetDirectories(packagePath);
+                foreach (var modelDir in modelDirs)
+                {
+                    if (Path.GetFileName(modelDir).Equals("Descriptor", StringComparison.OrdinalIgnoreCase)) continue;
+                    string tablePath = Path.Combine(modelDir, "AxTable");
+                    if (Directory.Exists(tablePath)) targetFolders.Add((tablePath, false));
+
+                    // 2. 核心：扫描扩展表文件夹
+                    string extPath = Path.Combine(modelDir, "AxTableExtension");
+                    if (Directory.Exists(extPath)) targetFolders.Add((extPath, true));
+                }
+            }
+
+            // 使用并行处理提升 3-5 倍速度
+            Parallel.ForEach(targetFolders, folder =>
+            {
+                var files = Directory.GetFiles(folder.FolderPath, "*.xml");
+                foreach (var file in files)
+                {
+                    string tableName = Path.GetFileNameWithoutExtension(file);
+                    if (folder.IsExtension && tableName.Contains("."))
+                    {
+                        tableName = tableName.Split('.')[0];
+                    }
+
+                    ParseRelationsWithReader(file, tableName, concurrentRelations);
+                }
+            });
+
+            _globalRelations = concurrentRelations.ToList();
+
+            // 序列化保存（这一步也比较耗时，异步处理）
+            SaveRelationCache();
+        }
+
+        private void ParseRelationsWithReader(string filePath, string tableName, ConcurrentBag<RelationEdge> list)
+        {
+            try
+            {
+                using (var reader = XmlReader.Create(filePath))
+                {
+                    string currentRelatedTable = "";
+                    while (reader.Read())
+                    {
+                        if (reader.NodeType == XmlNodeType.Element)
+                        {
+                            // 依然寻找 RelatedTable 节点
+                            if (reader.Name == "RelatedTable")
+                            {
+                                currentRelatedTable = reader.ReadElementContentAsString();
+                            }
+                            else if (reader.Name == "AxTableRelationConstraint")
+                            {
+                                using (var subReader = reader.ReadSubtree())
+                                {
+                                    string f = "", rf = "";
+                                    while (subReader.Read())
+                                    {
+                                        if (subReader.Name == "Field") f = subReader.ReadElementContentAsString();
+                                        if (subReader.Name == "RelatedField") rf = subReader.ReadElementContentAsString();
+                                    }
+                                    if (!string.IsNullOrEmpty(currentRelatedTable))
+                                    {
+                                        list.Add(new RelationEdge
+                                        {
+                                            FromTable = tableName, // 此时已处理为 SalesTable
+                                            FromField = f,
+                                            ToTable = currentRelatedTable,
+                                            ToField = rf
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch { /* 忽略错误 */ }
+        }
+
+        private void SaveRelationCache()
+        {
+            try
+            {
+                // 1. 将 List 转换为格式化的 JSON 字符串
+                // 使用 Newtonsoft.Json 序列化
+                string json = JsonConvert.SerializeObject(_globalRelations, Newtonsoft.Json.Formatting.Indented);
+
+                // 2. 写入到本地文件 (_relationCachePath 是你定义的 JSON 路径)
+                File.WriteAllText(_relationCachePath, json);
+            }
+            catch (Exception ex)
+            {
+                // 这种后台缓存操作如果失败，建议记录日志或静默处理，不要卡死主流程
+                System.Diagnostics.Debug.WriteLine("关联关系缓存保存失败: " + ex.Message);
+            }
+        }
+
+        // 使用流式读取，不加载整个 XML 树
+        private void ParseRelationsWithReader(string filePath, ConcurrentBag<RelationEdge> list)
+        {
+            string tableName = Path.GetFileNameWithoutExtension(filePath);
+            try
+            {
+                using (var reader = XmlReader.Create(filePath))
+                {
+                    string currentRelatedTable = "";
+                    while (reader.Read())
+                    {
+                        if (reader.NodeType == XmlNodeType.Element)
+                        {
+                            if (reader.Name == "RelatedTable")
+                            {
+                                currentRelatedTable = reader.ReadElementContentAsString();
+                            }
+                            else if (reader.Name == "AxTableRelationConstraint")
+                            {
+                                // 进入约束节点，提取 Field 和 RelatedField
+                                using (var subReader = reader.ReadSubtree())
+                                {
+                                    string f = "", rf = "";
+                                    while (subReader.Read())
+                                    {
+                                        if (subReader.Name == "Field") f = subReader.ReadElementContentAsString();
+                                        if (subReader.Name == "RelatedField") rf = subReader.ReadElementContentAsString();
+                                    }
+                                    if (!string.IsNullOrEmpty(currentRelatedTable))
+                                    {
+                                        list.Add(new RelationEdge
+                                        {
+                                            FromTable = tableName,
+                                            FromField = f,
+                                            ToTable = currentRelatedTable,
+                                            ToField = rf
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch { /* 忽略异常文件 */ }
+        }
+
+        public bool TableExists(string tableName)
+        {
+            // 检查这个表是否在任何关系中作为起始表或目标表出现过
+            return GetGlobalRelations().Any(r =>
+                r.FromTable.Equals(tableName, StringComparison.OrdinalIgnoreCase) ||
+                r.ToTable.Equals(tableName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// 获取两个表之间详细的字段对应关系
+        /// </summary>
+        /// <param name="mainTable">当前正在查看的主表</param>
+        /// <param name="relatedTable">点击的关联表名</param>
+        public List<RelationConstraintModel> GetTableRelationDetails(string mainTable, string relatedTable, string currentFieldName)
+        {
+            var details = new List<RelationConstraintModel>();
+
+            // 1. 获取主表的 XML 路径
+            // 建议在你的 TableMetadataHelper 中维护一个 Dictionary<string, string> tableNameToPath
+            _tablePathCache.TryGetValue(mainTable, out string xmlPath);
+
+            if (string.IsNullOrEmpty(xmlPath) || !File.Exists(xmlPath)) return details;
+
+            try
+            {
+                XElement xml = XElement.Load(xmlPath);
+                var relationNodes = xml.Element("Relations")?.Elements("AxTableRelation")
+                    .Where(r => r.Element("RelatedTable")?.Value.Equals(relatedTable, StringComparison.OrdinalIgnoreCase) == true);
+
+                if (relationNodes != null)
+                {
+                    foreach (var rel in relationNodes)
+                    {
+                        var constraints = rel.Element("Constraints")?.Elements().ToList();
+                        if (constraints == null) continue;
+
+                        // 检查该关联是否包含我们点击的字段
+                        bool isTargetRelation = constraints.Any(c =>
+                            c.Element("Field")?.Value.Equals(currentFieldName, StringComparison.OrdinalIgnoreCase) == true);
+
+                        if (isTargetRelation)
+                        {
+                            foreach (var con in constraints)
+                            {
+                                string type = con.Attribute(XName.Get("type", "http://www.w3.org/2001/XMLSchema-instance"))?.Value
+                                              ?? con.Name.LocalName;
+
+                                var model = new RelationConstraintModel();
+
+                                // 1. 处理标准字段对应关系
+                                if (type.Contains("AxTableRelationConstraintField"))
+                                {
+                                    model.SourceField = con.Element("Field")?.Value;
+                                    model.TargetField = con.Element("RelatedField")?.Value;
+                                }
+                                // 2. 处理固定值过滤 (RelatedFixed) - 解决您提到的枚举值显示问题
+                                else if (type.Contains("AxTableRelationConstraintRelatedFixed"))
+                                {
+                                    model.SourceField = "(固定过滤)";
+                                    string relatedField = con.Element("RelatedField")?.Value;
+                                    string valueStr = con.Element("ValueStr")?.Value ?? con.Element("Value")?.Value;
+                                    model.TargetField = $"{relatedField} == {valueStr}";
+                                }
+
+                                if (model.TargetField != null) details.Add(model);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) { /* 错误处理 */ }
+            return details;
+
+            return details;
         }
     }
 }
