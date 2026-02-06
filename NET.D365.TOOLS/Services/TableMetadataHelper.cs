@@ -189,7 +189,7 @@ namespace NET.D365.TOOLS.Services
         }
 
         // 增加获取枚举明细的方法
-        public List<EnumItemModel> GetEnumDetails(string enumName,string _connString)
+        public List<EnumItemModel> GetEnumDetails(string enumName, string _connString)
         {
             //if (_enumContentCache.TryGetValue(enumName, out var cachedList)) return cachedList;
 
@@ -420,8 +420,8 @@ namespace NET.D365.TOOLS.Services
 
         public async Task<List<TableFieldModel>> GetTableFieldsAsync(string tableName, string connString, Dictionary<string, string> labelCache)
         {
-             List<TableFieldModel> _allFieldsData = new List<TableFieldModel>();
-             var meta = GetMetadataFromXml(tableName);
+            List<TableFieldModel> _allFieldsData = new List<TableFieldModel>();
+            var meta = GetMetadataFromXml(tableName);
             using (var conn = new Microsoft.Data.SqlClient.SqlConnection(connString))
             {
                 string sql = @"SELECT f.name AS FieldName, t.name AS DataType, f.max_length AS Length 

@@ -77,7 +77,7 @@ namespace NET.D365.TOOLS
                 Font = new Font("Microsoft YaHei UI", 10)
             };
 
-           
+
 
 
             searchButton = new AntdUI.Button
@@ -124,9 +124,9 @@ namespace NET.D365.TOOLS
                     // 1. 同时执行两个耗时任务
                     var task1 = Task.Run(() => _metaHelper.BuildPathIndex(forceRefresh: true));
                     var task2 = LabelHelper.LoadAllLabelsAsync(remotePath, forceRefresh: true);
-                    var task3 = Task.Run(() => _metaHelper.BuildGlobalRelationMap(remotePath, forceRefresh: true));
+                    //var task3 = Task.Run(() => _metaHelper.BuildGlobalRelationMap(remotePath, forceRefresh: true));
 
-                    await Task.WhenAll(task1, task2, task3);
+                    await Task.WhenAll(task1, task2);
 
                     // 2. 更新内存中的 Label 引用
                     _labelCache = await task2;
@@ -143,7 +143,7 @@ namespace NET.D365.TOOLS
                     refreshBtn.Loading = false;
                 }
             };
-           
+
             searchPanel.Controls.Add(refreshBtn);
             searchPanel.Controls.Add(searchBox);
             searchPanel.Controls.Add(searchButton);
@@ -503,9 +503,9 @@ namespace NET.D365.TOOLS
         private async void btnSearch_Click(object sender, EventArgs e)
         {
             string tableName = searchBox.Text.Trim();
-            
+
             if (string.IsNullOrEmpty(tableName)) return;
-           
+
             searchButton.Loading = true;
             filterBox.Enabled = false;
 
